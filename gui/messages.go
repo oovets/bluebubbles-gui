@@ -109,6 +109,24 @@ func setMaxLinkPreviewsPerMessage(max int) {
 	previewMaxPerMessage.Store(int32(max))
 }
 
+// compactVBox creates a VBox with minimal spacing in compact mode
+func compactVBox(objs ...fyne.CanvasObject) *fyne.Container {
+	if compactModeEnabled() {
+		// In compact mode: use a custom layout with zero spacing
+		return container.New(layout.NewVBoxLayout(), objs...)
+	}
+	return container.NewVBox(objs...)
+}
+
+// compactBorder creates a border with minimal padding in compact mode
+func compactBorder(top, bottom, left, right fyne.CanvasObject, center fyne.CanvasObject) *fyne.Container {
+	if compactModeEnabled() {
+		// In compact mode: just return the center content without padding
+		return container.New(layout.NewStackLayout(), center)
+	}
+	return container.NewBorder(top, bottom, left, right, center)
+}
+
 func setLinkPreviewFetcherFromAPI(client *api.Client) {
 	previewFetcher.Lock()
 	if client == nil {
@@ -151,7 +169,7 @@ type hoverMessageRow struct {
 }
 
 func newHoverMessageRow(content *fyne.Container, actions fyne.CanvasObject) *hoverMessageRow {
-	host := container.NewVBox(container.NewBorder(nil, nil, nil, nil, content))
+	host := compactVBox(compactBorder(nil, nil, nil, nil, content))
 	r := &hoverMessageRow{
 		host:    host,
 		content: content,
@@ -168,7 +186,7 @@ func (r *hoverMessageRow) CreateRenderer() fyne.WidgetRenderer {
 func (r *hoverMessageRow) MouseIn(_ *desktop.MouseEvent) {
 	if r.actions != nil {
 		r.actions.Show()
-		r.host.Objects = []fyne.CanvasObject{container.NewBorder(nil, nil, nil, r.actions, r.content)}
+		r.host.Objects = []fyne.CanvasObject{compactBorder(nil, nil, nil, r.actions, r.content)}
 		r.host.Refresh()
 	}
 }
@@ -176,7 +194,7 @@ func (r *hoverMessageRow) MouseIn(_ *desktop.MouseEvent) {
 func (r *hoverMessageRow) MouseOut() {
 	if r.actions != nil {
 		r.actions.Hide()
-		r.host.Objects = []fyne.CanvasObject{container.NewBorder(nil, nil, nil, nil, r.content)}
+		r.host.Objects = []fyne.CanvasObject{compactBorder(nil, nil, nil, nil, r.content)}
 		r.host.Refresh()
 	}
 }
@@ -398,7 +416,7 @@ func buildMessageRow(msg models.Message, onReply func(models.Message), onReact f
 	if reactionRow := buildReactionRow(msg); reactionRow != nil {
 		objs = append(objs, alignOutgoingRow(reactionRow, msg.IsFromMe))
 	}
-	content := container.NewVBox(objs...)
+	content := compactVBox(objs...)
 
 	var actions []fyne.CanvasObject
 	if onReply != nil && !msg.IsFromMe {
