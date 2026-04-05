@@ -584,6 +584,9 @@ func (a *App) loadUIState() {
 	if a.maxLinkPreviews < 0 {
 		a.maxLinkPreviews = 0
 	}
+	// Sync global preview settings so they're used when rendering messages
+	setLinkPreviewEnabled(a.linkPreviewsEnabled)
+	setMaxLinkPreviewsPerMessage(a.maxLinkPreviews)
 
 	a.appTheme.dark = prefs.BoolWithFallback(prefDarkMode, a.appTheme.dark)
 	fontSize := prefs.IntWithFallback(prefFontSize, int(a.appTheme.fontSize))

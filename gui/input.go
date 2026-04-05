@@ -15,6 +15,63 @@ import (
 	"github.com/oovets/bluebubbles-gui/models"
 )
 
+// inputSurface wraps an input panel and makes it tappable to ensure
+// pane activation on any click, even on buttons or child widgets.
+type inputSurface struct {
+	widget.BaseWidget
+	content    fyne.CanvasObject
+	onActivate func()
+}
+
+func newInputSurface(content fyne.CanvasObject, onActivate func()) *inputSurface {
+	s := &inputSurface{content: content, onActivate: onActivate}
+	s.ExtendBaseWidget(s)
+	return s
+}
+
+func (s *inputSurface) MinSize() fyne.Size {
+	return s.content.MinSize()
+}
+
+func (s *inputSurface) CreateRenderer() fyne.WidgetRenderer {
+	return &inputSurfaceRenderer{surface: s}
+}
+
+type inputSurfaceRenderer struct {
+	surface *inputSurface
+}
+
+func (r *inputSurfaceRenderer) Layout(size fyne.Size) {
+	r.surface.content.Move(fyne.NewPos(0, 0))
+	r.surface.content.Resize(size)
+}
+
+func (r *inputSurfaceRenderer) MinSize() fyne.Size {
+	return r.surface.content.MinSize()
+}
+
+func (r *inputSurfaceRenderer) Refresh() {
+	canvas.Refresh(r.surface.content)
+}
+
+func (r *inputSurfaceRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.surface.content}
+}
+
+func (r *inputSurfaceRenderer) Destroy() {}
+
+func (s *inputSurface) Tapped(_ *fyne.PointEvent) {
+	if s.onActivate != nil {
+		s.onActivate()
+	}
+}
+
+func (s *inputSurface) TappedSecondary(_ *fyne.PointEvent) {
+	if s.onActivate != nil {
+		s.onActivate()
+	}
+}
+
 // focusEntry is a single-line widget.Entry that fires onFocused / onBlurred
 // on keyboard focus changes and intercepts shortcuts before the entry does.
 type focusEntry struct {
@@ -42,6 +99,14 @@ func (e *focusEntry) FocusGained() {
 	if e.onFocused != nil {
 		e.onFocused()
 	}
+}
+
+// Tapped handles clicks on the entry to ensure pane activation
+func (e *focusEntry) Tapped(event *fyne.PointEvent) {
+	if e.onFocused != nil {
+		e.onFocused()
+	}
+	e.Entry.Tapped(event)
 }
 
 func (e *focusEntry) FocusLost() {
@@ -152,18 +217,27 @@ type InputArea struct {
 	replyTarget     *models.Message
 	onLayoutChanged func()
 	statusSeq       atomic.Uint64
+	onActivate      func()
 }
 
 func NewInputArea(onSend func(string, *models.Message), onFocused func()) *InputArea {
-	return newInputArea(onSend, onFocused, nil)
+	return newInputAreaFull(onSend, onFocused, nil, nil)
 }
 
 func NewInputAreaWithShortcutHandler(onSend func(string, *models.Message), onFocused func(), onShortcut func(fyne.Shortcut) bool) *InputArea {
-	return newInputArea(onSend, onFocused, onShortcut)
+	return newInputAreaFull(onSend, onFocused, onShortcut, nil)
 }
 
-func newInputArea(onSend func(string, *models.Message), onFocused func(), onShortcut func(fyne.Shortcut) bool) *InputArea {
-	ia := &InputArea{onSend: onSend}
+func NewInputAreaWithActivation(onSend func(string, *models.Message), onFocused func(), onActivate func()) *InputArea {
+	return newInputAreaFull(onSend, onFocused, nil, onActivate)
+}
+
+func NewInputAreaWithShortcutAndActivation(onSend func(string, *models.Message), onFocused func(), onShortcut func(fyne.Shortcut) bool, onActivate func()) *InputArea {
+	return newInputAreaFull(onSend, onFocused, onShortcut, onActivate)
+}
+
+func newInputAreaFull(onSend func(string, *models.Message), onFocused func(), onShortcut func(fyne.Shortcut) bool, onActivate func()) *InputArea {
+	ia := &InputArea{onSend: onSend, onActivate: onActivate}
 
 	ia.entry = newFocusEntry("", onFocused, onShortcut, func(text string) {
 		ia.submit(text)
@@ -204,7 +278,9 @@ func newInputArea(onSend func(string, *models.Message), onFocused func(), onShor
 		ia.inputBg,
 		cardContent,
 	))
-	ia.panel = rawPanel
+	// Wrap in tappable surface to ensure clicks on any part (including buttons)
+	// trigger pane activation
+	ia.panel = newInputSurface(rawPanel, onActivate)
 	ia.adjustEntryRows("")
 	ia.RefreshLayout()
 	return ia

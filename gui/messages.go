@@ -536,16 +536,21 @@ func foldReactionMessages(messages []models.Message) []models.Message {
 	return display
 }
 
-// isLastInSenderGroup reports whether message at idx is the last consecutive
-// message from that sender before a different sender (or end of list).
+// isLastInSenderGroup reports whether message at idx is the last message
+// in a sender group. Messages are grouped if they're from the same sender
+// and within 5 minutes of each other (time-based grouping).
 func isLastInSenderGroup(msgs []models.Message, idx int) bool {
 	if idx+1 >= len(msgs) {
 		return true
 	}
 	cur, next := msgs[idx], msgs[idx+1]
+
+	// Different "from me" status = different group
 	if cur.IsFromMe != next.IsFromMe {
 		return true
 	}
+
+	// Different sender = different group
 	curAddr, nextAddr := "", ""
 	if cur.Handle != nil {
 		curAddr = cur.Handle.Address
@@ -553,7 +558,18 @@ func isLastInSenderGroup(msgs []models.Message, idx int) bool {
 	if next.Handle != nil {
 		nextAddr = next.Handle.Address
 	}
-	return curAddr != nextAddr
+	if curAddr != nextAddr {
+		return true
+	}
+
+	// Same sender: check time gap (5 minute threshold)
+	const groupTimeGapMs = 5 * 60 * 1000 // 5 minutes in milliseconds
+	timeDiff := next.DateCreated - cur.DateCreated
+	if timeDiff > groupTimeGapMs {
+		return true
+	}
+
+	return false
 }
 
 func applyMessageSideIndent(row fyne.CanvasObject, isFromMe bool) fyne.CanvasObject {
@@ -736,40 +752,51 @@ func buildAsyncAttachmentImage(guid, name string, fetch func(string) ([]byte, st
 	}
 
 	content := container.NewVBox()
-	loadingLabel := widget.NewLabel("Loading image...")
-	loadingLabel.Importance = widget.LowImportance
-	content.Objects = []fyne.CanvasObject{loadingLabel}
+	var loadBtn *widget.Button
 
-	go func() {
-		data, mimeType, err := fetch(guid)
-		if err != nil {
-			log.Printf("[attachment] API download error guid=%q: %v", guid, err)
-			fyne.Do(func() {
-				loadingLabel.SetText("Failed to load image")
-			})
-			return
-		}
-		if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
-			log.Printf("[attachment] image decode failed guid=%q: %v", guid, err)
-			fyne.Do(func() {
-				loadingLabel.SetText("Image decode failed")
-			})
-			return
-		}
-		resName := attachmentResourceName(guid, name, mimeType)
-		res := fyne.NewStaticResource(resName, data)
-		setCachedAttachmentResource(guid, res)
-		img := newInlineImageFromResource(res)
-		fyne.Do(func() {
-			content.Objects = []fyne.CanvasObject{img}
-			content.Refresh()
-			img.Refresh()
-			if onAsyncResize != nil {
-				onAsyncResize()
+	loadBtn = widget.NewButton("🖼 Load image", func() {
+		loadBtn.Disable()
+		loadingLabel := widget.NewLabel("Loading...")
+		loadingLabel.Importance = widget.LowImportance
+		content.Objects = []fyne.CanvasObject{loadingLabel}
+		content.Refresh()
+
+		go func() {
+			data, mimeType, err := fetch(guid)
+			if err != nil {
+				log.Printf("[attachment] API download error guid=%q: %v", guid, err)
+				fyne.Do(func() {
+					content.Objects = []fyne.CanvasObject{widget.NewLabel("Failed to load image")}
+					content.Refresh()
+					loadBtn.Enable()
+				})
+				return
 			}
-		})
-	}()
+			if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+				log.Printf("[attachment] image decode failed guid=%q: %v", guid, err)
+				fyne.Do(func() {
+					content.Objects = []fyne.CanvasObject{widget.NewLabel("Image decode failed")}
+					content.Refresh()
+					loadBtn.Enable()
+				})
+				return
+			}
+			resName := attachmentResourceName(guid, name, mimeType)
+			res := fyne.NewStaticResource(resName, data)
+			setCachedAttachmentResource(guid, res)
+			img := newInlineImageFromResource(res)
+			fyne.Do(func() {
+				content.Objects = []fyne.CanvasObject{img}
+				content.Refresh()
+				img.Refresh()
+				if onAsyncResize != nil {
+					onAsyncResize()
+				}
+			})
+		}()
+	})
 
+	content.Objects = []fyne.CanvasObject{loadBtn}
 	return content
 }
 
@@ -905,17 +932,10 @@ func buildLinkPreviewCard(rawURL string, onAsyncResize func()) fyne.CanvasObject
 			}
 
 			if meta.ImageURL != "" {
-				go func() {
-					if img := buildRemoteImagePreview(meta.ImageURL); img != nil {
-						fyne.Do(func() {
-							card.Objects = prependCanvasObject(card.Objects, img)
-							card.Refresh()
-							if collapsed.expanded && onAsyncResize != nil {
-								onAsyncResize()
-							}
-						})
-					}
-				}()
+				// Don't auto-load: show a clickable image placeholder instead
+				imgBtn := newImageLoadButton(meta.ImageURL, onAsyncResize)
+				card.Objects = prependCanvasObject(card.Objects, imgBtn)
+				card.Refresh()
 			}
 
 			card.Refresh()
@@ -1164,6 +1184,35 @@ func isLikelyDirectImageURL(u *url.URL) bool {
 		return false
 	}
 	return imageURLPattern.MatchString(strings.ToLower(u.Path + "?" + u.RawQuery))
+}
+
+func newImageLoadButton(rawURL string, onAsyncResize func()) fyne.CanvasObject {
+	var imgContainer *fyne.Container
+	imgContainer = container.NewVBox()
+
+	var loadBtn *widget.Button
+	loadBtn = widget.NewButton("🖼 Load image", func() {
+		loadBtn.Disable()
+		go func() {
+			if img := buildRemoteImagePreview(rawURL); img != nil {
+				fyne.Do(func() {
+					imgContainer.Objects = []fyne.CanvasObject{img}
+					imgContainer.Refresh()
+					if onAsyncResize != nil {
+						onAsyncResize()
+					}
+				})
+			} else {
+				fyne.Do(func() {
+					loadBtn.Enable()
+					imgContainer.Objects = []fyne.CanvasObject{widget.NewLabel("Failed to load image")}
+					imgContainer.Refresh()
+				})
+			}
+		}()
+	})
+
+	return container.NewVBox(loadBtn, imgContainer)
 }
 
 func buildRemoteImagePreview(rawURL string) fyne.CanvasObject {

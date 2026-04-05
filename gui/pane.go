@@ -140,10 +140,11 @@ func newChatPane(onSend func(*ChatPane, string, *models.Message), onReact func(*
 		}
 	})
 
-	p.inputArea = NewInputAreaWithShortcutHandler(
+	p.inputArea = NewInputAreaWithShortcutAndActivation(
 		func(text string, replyTo *models.Message) { onSend(p, text, replyTo) },
 		func() { onFocused(p) },
 		onInputShortcut,
+		func() { onFocused(p) },
 	)
 	p.inputArea.SetOnLayoutChanged(func() {
 		p.refreshBottomInset()
